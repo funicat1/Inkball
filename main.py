@@ -1,42 +1,121 @@
 from tkinter import *
 from PIL import Image,ImageTk
+import math
 
+def unit(x, y):
+    length = math.sqrt(x*x + y*y)
+    if length == 0:
+        raise ValueError("zero vector has no direction")
+    return (x / length, y / length)
+
+def scale(vec,by):
+    return tuple([i*by for i in vec])
 class Ball:
-    def __init__(self,color,x=100,y=100,vx=5,vy=5):
+    def __init__(self,color,x=100,y=100,vx=2,vy=2):
         self.x = x
         self.y = y
         self.vx = vx
         self.vy = vy
         self.color = color
-    def update(self,level):
+        self.radius = 12
+    def update_tiles(self, level):
+        # move ball
         self.x += self.vx
         self.y += self.vy
-        return level # the ball modifies the level
+
+        # tiles ball could be overlapping
+        min_tx = int((self.x - self.radius) // 32)
+        max_tx = int((self.x + self.radius) // 32)
+        min_ty = int((self.y - self.radius) // 32)
+        max_ty = int((self.y + self.radius) // 32)
+
+        for ty in range(min_ty, max_ty + 1):
+            for tx in range(min_tx, max_tx + 1):
+                if level[ty][tx] == 1:
+                    # tile rectangle
+                    rx, ry, rw, rh = tx*32, ty*32, 32, 32
+                    cx, cy = self.closest_point_on_rect(rx, ry, rw, rh)
+                    dx = self.x - cx
+                    dy = self.y - cy
+                    dist2 = dx*dx + dy*dy
+                    if dist2 < self.radius*self.radius:
+                        dist = math.sqrt(dist2) or 0.001
+                        nx = dx / dist
+                        ny = dy / dist
+                        dot = self.vx*nx + self.vy*ny
+                        self.vx -= 2*dot*nx
+                        self.vy -= 2*dot*ny
+                        overlap = self.radius - dist
+                        self.x += nx * overlap
+                        self.y += ny * overlap
+
+    # helper: closest point on a rectangle
+    def closest_point_on_rect(self, rx, ry, rw, rh):
+        closest_x = min(max(self.x, rx), rx + rw)
+        closest_y = min(max(self.y, ry), ry + rh)
+        return closest_x, closest_y
+
+    # ball-ball collision
+    def collide_with(self, other):
+        dx = other.x - self.x
+        dy = other.y - self.y
+        dist2 = dx*dx + dy*dy
+        radius_sum = self.radius + other.radius
+        if dist2 < radius_sum*radius_sum:
+            dist = math.sqrt(dist2) or 0.001
+            nx = dx / dist
+            ny = dy / dist
+            # velocity along normal
+            p = 2 * ((self.vx*nx + self.vy*ny) - (other.vx*nx + other.vy*ny)) / 2
+            self.vx -= p * nx
+            self.vy -= p * ny
+            other.vx += p * nx
+            other.vy += p * ny
+            # push apart
+            overlap = (radius_sum - dist) / 2
+            self.x -= nx * overlap
+            self.y -= ny * overlap
+            other.x += nx * overlap
+            other.y += ny * overlap
+    def update(self, level, balls):
+        self.update_tiles(level)
+        for other in balls:
+            if other is not self:
+                self.collide_with(other)
     def image(self):
-        if self.color == "green":
-            return greenball
+        return balldict[self.color]
 
-ballsleft = []
-balls = [
-    Ball("green")
-]
-
-root = Tk()
-root.title("InkBall")
-menu = Menu()
-img = ImageTk.PhotoImage(file='.rsrc/ICON/7.ico') # we assume the data from original inkball is here.
 spritesheet = Image.open(".rsrc/BITMAP/501.bmp")
 def gettile(x,y,x2,y2):
     return spritesheet.crop((x,y,x2+x,y2+y))
-def filtercol(img: Image.Image,color=(255,0,255)): # filters out color pixel by pixel. BMPs are not transparent!
+def filtercol(img: Image.Image): # filters out color pixel by pixel. BMPs are not transparent! Only for balls.
     img = img.convert("RGBA")
     for y in range(24):
         for x in range(24):
-            # idk if its not compatible with images on different sizes.
             r,g,b,a = img.getpixel((x,y))
-            if (r,g,b) == color:
-                img.putpixel((x,y),(0,0,0,0))
+            _,a,_ = spritesheet.getpixel((x+1,y+277))
+            img.putpixel((x,y),(r,g,b,a))
     return img
+
+root = Tk()
+
+balldict = {}
+
+# THE BALL DICTIONARY
+for c,i in enumerate(["white", "orange", "blue", "green", "yellow"]):
+    y = 157 + (c*24)
+    balldict[i] = ImageTk.PhotoImage(image=filtercol(gettile(1,y,24,24)))
+
+ballsleft = []
+balls = [
+    Ball("white",100,100+i)
+    for i in range(0,64,24)
+]
+
+root.title("InkBall")
+menu = Menu()
+img = ImageTk.PhotoImage(file='.rsrc/ICON/7.ico') # we assume the data from original inkball is here.
+
 blanktile = ImageTk.PhotoImage(image=gettile(1,1,32,32))
 whitetile = ImageTk.PhotoImage(image=gettile(99,1,32,32))
 topbarpart1 = ImageTk.PhotoImage(image=gettile(264,236,104,42))
@@ -50,8 +129,6 @@ fieldrightpart = gettile(370,176,2,19)
 redfieldleftpart = gettile(264,216,2,19)
 redfieldmiddlepart = gettile(268,216,1,19)
 redfieldrightpart = gettile(378,216,3,19)
-
-greenball = ImageTk.PhotoImage(image=filtercol(gettile(1,229,24,24)))
 
 root.iconphoto(False, img)
 menu.add_cascade(label="Game")
@@ -70,7 +147,7 @@ def createtextsheet(atx,aty,reference):
     for i in reference:
         letter = ImageTk.PhotoImage(image=gettile(atx,aty,9,9))
         out[i] = letter
-        atx += 9 # letters have 2 letter spacing in inkball's spritesheet.
+        atx += 9 # yeah i was shocked too
     return out
 
 def rendertext(canvas: Canvas,x,y,text,sheet,textdir="left"): # i hate vscode
@@ -108,6 +185,12 @@ def createfield(width,red=False):
     return field # Never again.
     
 
+def hextolist2d(leveldat):
+    out = []
+    for y,line in enumerate(leveldat):
+        out.append(hextolist(line))
+    return out
+
 levelfield = ImageTk.PhotoImage(image=createfield(27)) # ?
 scorefield = ImageTk.PhotoImage(image=createfield(63)) # not sure
 timefield = ImageTk.PhotoImage(image=createfield(45,red=True)) # surenot
@@ -126,21 +209,21 @@ blocks = 0
 # objects are HEX digits, why hex? having 00-99 is awkward.
 leveldata = [
     "0101010101010101010101010101010101",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
-    "0100000000000000000000000000000001",
+    "0100000000000000000000000000010001",
+    "0100000000000000000000000000010001",
+    "0100000000000000000000000000010001",
+    "0100000000000000000000000000010001",
+    "0100000000000000000000000000010001",
+    "0100000000000000000000000000010001",
+    "0100000000000000000000000000010001",
+    "0100000000000000000000010000000001",
+    "0100000000000000000000010000000001",
+    "0100000000000000000000010000000001",
+    "0101010101010000000000010000000001",
+    "0100000000000000000000010000000001",
+    "0100000000000000000000010000000001",
+    "0100000000000000000000010000000001",
+    "0100000000000000000000010000000001",
     "0101010101010101010101010101010101",
     
 ]
@@ -150,7 +233,7 @@ root.config(menu=menu)
 root.geometry("544x586")
 root.resizable(False,False)
 canvas = Canvas(root,width=17*32,height=586, bd=0,highlightthickness=0,background="red")
-canvas.pack()
+canvas.pack(fill=X)
 canvas.create_image(0,0,anchor=NW,image=topbarpart1)
 canvas.create_image(104,0,anchor=NW,image=topbarpart2)
 canvas.create_image(104+341,0,anchor=NW,image=topbarpart3)
@@ -176,9 +259,13 @@ for y,line in enumerate(leveldata):
             canvas.create_image(x*32,(y*32)+42,anchor=NW,image=whitetile)
 
 def update():
+    global level
+    canvas.delete("upd")
     for i in balls: # topbar is 42 pixels in height.
-        canvas.create_image(i.x,i.y+42,anchor=NW,image=i.image())
-    root.after(500,update)
+        canvas.create_image(i.x-12,i.y-12+42,anchor=NW,image=i.image(),tag="upd")
+        level2d = hextolist2d(leveldata)
+        i.update(level2d, balls)
+    root.after(10,update)
     # ow my balls owch
 update()
 root.mainloop()
