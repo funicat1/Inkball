@@ -1,6 +1,6 @@
 from tkinter import *
 from PIL import Image,ImageTk
-import math
+import math,secrets
 
 def unit(x, y):
     length = math.sqrt(x*x + y*y)
@@ -10,6 +10,22 @@ def unit(x, y):
 
 def scale(vec,by):
     return tuple([i*by for i in vec])
+
+def distance(p1, p2):
+    return math.hypot(p2[0]-p1[0], p2[1]-p1[1])
+
+def reflect(v, normal):
+    dot = v[0]*normal[0] + v[1]*normal[1]
+    return (v[0] - 2*dot*normal[0], v[1] - 2*dot*normal[1])
+
+def normalize(v):
+    length = math.hypot(v[0], v[1])
+    if length == 0:
+        return (0,0)
+    return (v[0]/length, v[1]/length)
+
+def distance(a,b):
+    return math.hypot(b[0]-a[0], b[1]-a[1])
 class Ball:
     def __init__(self,color,x=100,y=100,vx=2,vy=2):
         self.x = x
@@ -55,6 +71,16 @@ class Ball:
         closest_y = min(max(self.y, ry), ry + rh)
         return closest_x, closest_y
 
+    def closest_point_on_line(self,a, b, p):
+        ab = (b[0]-a[0], b[1]-a[1])
+        ap = (p[0]-a[0], p[1]-a[1])
+        length2 = ab[0]**2 + ab[1]**2
+        if length2 == 0:   # a == b
+            return a        # closest point is just the single point
+        t = (ap[0]*ab[0] + ap[1]*ab[1]) / length2
+        t = max(0, min(1, t))
+        return (a[0] + ab[0]*t, a[1] + ab[1]*t)
+
     # ball-ball collision
     def collide_with(self, other):
         dx = other.x - self.x
@@ -77,11 +103,33 @@ class Ball:
             self.y -= ny * overlap
             other.x += nx * overlap
             other.y += ny * overlap
-    def update(self, level, balls):
+    def update(self, level, lines, balls, canvas):
         self.update_tiles(level)
         for other in balls:
             if other is not self:
                 self.collide_with(other)
+        collided = False
+        for c, line in enumerate(lines.copy()):
+            # skip the tag
+            if collided:
+                break
+            for i in range(2, len(line)):  # start at 2, because 1-based previous point
+                a = line[i-1]  # previous point
+                b = line[i]    # current point
+                ax, ay = float(a[0]), float(a[1])
+                bx, by = float(b[0]), float(b[1])
+                closest = self.closest_point_on_line((ax, ay-42), (bx, by-42), (self.x, self.y))
+                dist = distance(closest, (self.x, self.y))
+                if dist <= self.radius:
+                    normal = normalize((self.x - closest[0], self.y - closest[1]))
+                    self.vx, self.vy = reflect((self.vx, self.vy), normal)
+                    overlap = self.radius - dist
+                    self.x += normal[0]*overlap
+                    self.y += normal[1]*overlap
+                    lines[c] = [None] # HEY GARBAGAE COLLECTOR!!!
+                    canvas.delete(line[0])
+                    collided = True
+        return lines # lines are modifiable
     def image(self):
         return balldict[self.color]
 
@@ -108,8 +156,7 @@ for c,i in enumerate(["white", "orange", "blue", "green", "yellow"]):
 
 ballsleft = []
 balls = [
-    Ball("white",100,100+i)
-    for i in range(0,64,24)
+    Ball("white",100,110)
 ]
 
 root.title("InkBall")
@@ -209,21 +256,21 @@ blocks = 0
 # objects are HEX digits, why hex? having 00-99 is awkward.
 leveldata = [
     "0101010101010101010101010101010101",
-    "0100000000000000000000000000010001",
-    "0100000000000000000000000000010001",
-    "0100000000000000000000000000010001",
-    "0100000000000000000000000000010001",
-    "0100000000000000000000000000010001",
-    "0100000000000000000000000000010001",
-    "0100000000000000000000000000010001",
-    "0100000000000000000000010000000001",
-    "0100000000000000000000010000000001",
-    "0100000000000000000000010000000001",
-    "0101010101010000000000010000000001",
-    "0100000000000000000000010000000001",
-    "0100000000000000000000010000000001",
-    "0100000000000000000000010000000001",
-    "0100000000000000000000010000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
+    "0100000000000000000000000000000001",
     "0101010101010101010101010101010101",
     
 ]
@@ -234,6 +281,9 @@ root.geometry("544x586")
 root.resizable(False,False)
 canvas = Canvas(root,width=17*32,height=586, bd=0,highlightthickness=0,background="red")
 canvas.pack(fill=X)
+
+lines = [] # [ [<TAG>, <POINTS> ] ]
+
 canvas.create_image(0,0,anchor=NW,image=topbarpart1)
 canvas.create_image(104,0,anchor=NW,image=topbarpart2)
 canvas.create_image(104+341,0,anchor=NW,image=topbarpart3)
@@ -258,13 +308,64 @@ for y,line in enumerate(leveldata):
         elif col == 1:
             canvas.create_image(x*32,(y*32)+42,anchor=NW,image=whitetile)
 
+drawing = None
+
+def absolute_x(widget):
+    if widget == widget.winfo_toplevel():
+        # top of the widget hierarchy for this window
+        return root.winfo_x()
+    return widget.winfo_x() + absolute_x(widget.nametowidget(widget.winfo_parent()))
+
+def absolute_y(widget):
+    if widget == widget.winfo_toplevel():
+        # top of the widget hierarchy for this window
+        return root.winfo_y()
+    return widget.winfo_y() + absolute_y(widget.nametowidget(widget.winfo_parent()))
+
+t = 0
+
+def startdrawing(e):
+    global drawing
+    drawing = secrets.token_hex(16) # drawing = <TAG>
+    lines.append([ drawing, (root.winfo_pointerx() - absolute_x(canvas) - 8, root.winfo_pointery() - absolute_y(canvas) - 52) ])
+
+def listfind(tag,l):
+    for c,i in enumerate(l):
+        if i[0] == tag:
+            return c
+    # ???
+    raise ValueError("Not found.")
+
+
+def drawings(e):
+    global t,drawing
+    try:
+        if drawing != None:
+            t += 1
+            if t > 25:
+                index = listfind(drawing,lines)
+                canvas.create_line(lines[index][-1][0],lines[index][-1][1], root.winfo_pointerx() - absolute_x(canvas) - 8, max(root.winfo_pointery() - absolute_y(canvas) - 52,0),fill="black",tag=drawing,width=8)
+                lines[index].append((root.winfo_pointerx() - absolute_x(canvas) - 8, max(root.winfo_pointery() - absolute_y(canvas),0) - 52))
+                t = 0
+    except:
+        drawing = None # Possibly, the ball cleared the line before the drawing finished.
+
+def stopdrawing(e):
+    global drawing
+    drawing = None # drawing = <TAG>
+
+
+canvas.bind("<ButtonPress>",startdrawing)
+canvas.bind("<Motion>",drawings)
+canvas.bind("<ButtonRelease>",stopdrawing)
+
 def update():
     global level
     canvas.delete("upd")
     for i in balls: # topbar is 42 pixels in height.
         canvas.create_image(i.x-12,i.y-12+42,anchor=NW,image=i.image(),tag="upd")
         level2d = hextolist2d(leveldata)
-        i.update(level2d, balls)
+        i.update(level2d, lines, balls, canvas)
     root.after(10,update)
     # ow my balls owch
 update()
